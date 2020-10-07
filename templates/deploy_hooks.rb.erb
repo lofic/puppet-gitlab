@@ -1,0 +1,27 @@
+#!/usr/bin/ruby
+
+#gem install --user-install gitlab
+require 'gitlab'
+require 'digest'
+
+group_id=<%= @gitlab_puppet_modules_group_id %>
+stor_base_path = '/var/opt/gitlab/git-data/repositories/@hashed/'
+hook_folder = '/var/opt/gitlab/custom_hooks/puppet'
+
+Gitlab.endpoint = '<%= @gitlab_ebdpoint %>'
+Gitlab.private_token = '<%= @api_token %>'
+projects = Gitlab.group(group_id).projects
+
+projects.each do |p|
+    hashstor = Digest::SHA256.hexdigest(p.id.to_s)
+    d1="#{hashstor[0..1]}"
+    d2="#{hashstor[2..3]}"
+    hashedpath = "#{stor_base_path}#{d1}/#{d2}/#{hashstor}.git"
+    if File.directory?(hashedpath)
+        hookpath = "#{hashedpath}/custom_hooks"
+        unless File.symlink?(hookpath)
+            puts "Link needed for #{p.name}"
+            File.symlink(hook_folder, hookpath)
+        end
+    end
+end

@@ -1,0 +1,70 @@
+#!/bin/bash
+
+echo
+echo '== Begin post-receive hook =='
+echo
+
+# disable 2 ruby env vars for executing the hook from the GITLAB UI
+unset GEM_PATH
+unset RUBYOPT
+
+puppet_masters=(<%= @puppet_masters.join(' ') %>)
+
+while read oldrev newrev refname; do
+
+    branch=$(echo "$refname" | cut -d '/' -f 3)
+    scriptpath=$(dirname "$0")
+    projectpath=$(dirname "$scriptpath")
+    fullpath=$(awk -F'[[:blank:]]*=[[:blank:]]*' '/fullpath/ { print $2 }' $projectpath/config)
+    namespace=${fullpath%/*}
+    project=${fullpath#*/}
+
+    # r10k and hiera data : project puppet environments
+    if [ "${namespace}" == "<%= @gitlab_puppet_env_namespace %>" ]; then
+        # The branches named patch* are for merge requests. Do not deploy an environment
+        # for those branches.
+        if [[ "$project" == "<%= @gitlab_puppet_env_project %>" ]] && [[ ! "$branch" =~ [Pp]atch* ]]; then
+          if git diff-tree --name-only -r -z $oldrev $newrev -- Puppetfile | grep -q Puppetfile; then
+            echo
+            echo 'r10k Puppetfile changed - redeploy the environment'
+            echo "Redeploy the puppet environment matching the branch that you have edited : $branch"
+            deplcmd="r10k deploy environment $branch -v -p -c /etc/r10k/r10k.yaml"
+            echo "Refresh on puppet masters"
+            for puppet_master in ${puppet_masters[@]}; do
+                echo "Refresh on ${puppet_master}"
+                ssh <%= @puppetmaster_deploy_user %>@${puppet_master} "$deplcmd"
+            done
+            echo
+          else
+            echo
+            echo 'yaml or other file changed - update the environment'
+            echo "Trigger a run of 'r10k deploy environment $branch -v'"
+            deplcmd="r10k deploy environment $branch -v -c /etc/r10k/r10k.yaml"
+            echo "Refresh on puppet masters"
+            for puppet_master in ${puppet_masters[@]}; do
+                echo "Refresh on ${puppet_master}"
+                ssh <%= @puppetmaster_deploy_user %>@${puppet_master} "$deplcmd"
+            done
+            echo
+          fi
+        fi
+    fi
+
+    # Puppet modules
+    if [ "${namespace}" == "<%= @gitlab_puppet_module_namespace %>" ]; then
+        echo "Redeploy the module $project"
+        dplcmd="r10k deploy module $project -v -c /etc/r10k/r10k.yaml"
+        echo "Refresh on puppet masters"
+        echo $dplcmd
+        for puppet_master in ${puppet_masters[@]}; do
+            echo "Refresh on ${puppet_master}"
+            ssh <%= @puppetmaster_deploy_user %>@${puppet_master} "$dplcmd"
+        done
+        echo
+    fi
+
+
+done
+
+echo
+echo '== End post-receive hook =='
